@@ -136,6 +136,10 @@ private:
     std::vector<my_float> _proposal_set;
     std::vector<my_float> _prefix_sum;
     my_float correct_factor;
+    bool _use_reservoir;
+    reservoir _reservoir;
+    std::function<my_float(my_float)> _target_distribution;
+    std::shared_ptr<sampler> _proposal_sampler;
 public:
     sir_sampler(sampler& proposal_sampler,const std::function<my_float(my_float)>& target_distribution,const int M,bool use_reservoir = false){
 
@@ -143,39 +147,65 @@ public:
         gen =  std::mt19937(rd());
         dice = std::uniform_real_distribution<my_float>(0,1);
 
-        const auto inv_float_M = 1.0/static_cast<my_float>(M);
-        std::vector<my_float> weight_set{};
-        _proposal_set.reserve(M);
-        weight_set.reserve(M);
+        _use_reservoir = use_reservoir;
 
-        //generate M proposal samples, and calculate weights for each.
-        for(int j = 0; j<M; ++j){
-            auto xj = proposal_sampler.next_sample();
-            _proposal_set.emplace_back(xj);
-            auto p_hat = target_distribution(xj);
-            auto p = proposal_sampler.evaluate(xj);
-            auto w = (p_hat/p)*inv_float_M;
-            weight_set.emplace_back(w);
+        if(_use_reservoir){
+            _target_distribution = target_distribution;
+            _proposal_sampler.reset(&proposal_sampler);
+        }else{
+            const auto inv_float_M = 1.0/static_cast<my_float>(M);
+            std::vector<my_float> weight_set{};
+            _proposal_set.reserve(M);
+            weight_set.reserve(M);
+
+            //generate M proposal samples, and calculate weights for each.
+            for(int j = 0; j<M; ++j){
+                auto xj = proposal_sampler.next_sample();
+                _proposal_set.emplace_back(xj);
+                auto p_hat = target_distribution(xj);
+                auto p = proposal_sampler.evaluate(xj);
+                auto w = (p_hat/p)*inv_float_M;
+                weight_set.emplace_back(w);
+            }
+
+            correct_factor = std::accumulate(weight_set.begin(),weight_set.end(),0.0);
+
+            _prefix_sum.clear();
+            std::inclusive_scan(weight_set.cbegin(),weight_set.cend(),std::back_inserter(_prefix_sum),std::plus<my_float>{});
+            auto inv_total_sum = 1.0/_prefix_sum.back();
+            std::for_each(_prefix_sum.begin(),_prefix_sum.end(),[inv_total_sum](auto & s){s *= inv_total_sum;});
         }
-
-        correct_factor = std::accumulate(weight_set.begin(),weight_set.end(),0.0);
-
-        _prefix_sum.clear();
-        std::inclusive_scan(weight_set.cbegin(),weight_set.cend(),std::back_inserter(_prefix_sum),std::plus<my_float>{});
-        auto inv_total_sum = 1.0/_prefix_sum.back();
-        std::for_each(_prefix_sum.begin(),_prefix_sum.end(),[inv_total_sum](auto & s){s *= inv_total_sum;});
     }
 
     my_float next_sample(){
         auto rand = dice(gen);
+        if(_use_reservoir){
+            auto x = _proposal_sampler->next_sample();
+            auto p = _proposal_sampler->evaluate(x);
+            auto p_hat = _target_distribution(x);
+            auto w = p_hat/p;
+            
+            if(_reservoir.total_weight == 0){
+                _reservoir.current_sample = x;
+            }else{
+                auto threshold = w/(w+_reservoir.total_weight);
+                if(rand < threshold){
+                    _reservoir.current_sample = x;
+                }      
+            }
 
-        //use binary search to draw a new weighted sample
-        auto lower = std::lower_bound(_prefix_sum.begin(),_prefix_sum.end(),rand);
-        return _proposal_set[std::distance(_prefix_sum.begin(),lower)];
+            _reservoir.total_weight += w;
+
+            return _reservoir.current_sample;
+        }else{
+            //use binary search to draw a new weighted sample
+            auto lower = std::lower_bound(_prefix_sum.begin(),_prefix_sum.end(),rand);
+            return _proposal_set[std::distance(_prefix_sum.begin(),lower)];
+        }
     }
 
     my_float get_correct_factor() const{
-        return correct_factor;
+        return _use_reservoir?_reservoir.total_weight:correct_factor;
     }
 };
 
@@ -188,7 +218,7 @@ my_float ris_monte_carlo_integrator(const integral_info & int_info,sampler& prop
 
     proposal_sampler.set_domain(int_info.second.first,int_info.second.second);
 
-    sir_sampler sir{proposal_sampler,target_distribution,1000};
+    sir_sampler sir{proposal_sampler,target_distribution,1000,true};
 
     const auto & f = int_info.first;
 

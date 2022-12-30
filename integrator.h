@@ -7,6 +7,8 @@
 
 #include <cmath>
 #include <functional>
+#include <random>
+#include <numeric>
 
 using my_float = double;
 using integrand = std::function<my_float (my_float)>;
@@ -159,7 +161,7 @@ public:
         correct_factor = std::accumulate(weight_set.begin(),weight_set.end(),0.0);
 
         _prefix_sum.clear();
-        std::inclusive_scan(weight_set.begin(),weight_set.end(),std::back_inserter(_prefix_sum),std::plus<my_float>{});
+        std::inclusive_scan(weight_set.cbegin(),weight_set.cend(),std::back_inserter(_prefix_sum),std::plus<my_float>{});
         auto inv_total_sum = 1.0/_prefix_sum.back();
         std::for_each(_prefix_sum.begin(),_prefix_sum.end(),[inv_total_sum](auto & s){s *= inv_total_sum;});
     }

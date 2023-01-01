@@ -9,6 +9,7 @@
 #include <functional>
 #include <random>
 #include <numeric>
+#include <utility>
 
 using my_float = double;
 using integrand = std::function<my_float (my_float)>;
@@ -124,11 +125,6 @@ my_float mis_monte_carlo_integrator(const integral_info & int_info,std::vector<s
  * Sample Importance Resampling
  */
 
-struct reservoir{
-    my_float current_sample;
-    my_float total_weight;
-};
-
 struct sir_sampler{
 private:
     std::uniform_real_distribution<my_float> dice;
@@ -136,76 +132,98 @@ private:
     std::vector<my_float> _proposal_set;
     std::vector<my_float> _prefix_sum;
     my_float correct_factor;
-    bool _use_reservoir;
-    reservoir _reservoir;
-    std::function<my_float(my_float)> _target_distribution;
-    std::shared_ptr<sampler> _proposal_sampler;
 public:
-    sir_sampler(sampler& proposal_sampler,const std::function<my_float(my_float)>& target_distribution,const int M,bool use_reservoir = false){
+    sir_sampler(sampler& proposal_sampler,const std::function<my_float(my_float)>& target_distribution,const int M){
 
         static std::random_device rd;  // Will be used to obtain a seed for the random number engine
         gen =  std::mt19937(rd());
         dice = std::uniform_real_distribution<my_float>(0,1);
 
-        _use_reservoir = use_reservoir;
+        const auto inv_float_M = 1.0/static_cast<my_float>(M);
+        std::vector<my_float> weight_set{};
+        _proposal_set.reserve(M);
+        weight_set.reserve(M);
 
-        if(_use_reservoir){
-            _target_distribution = target_distribution;
-            _proposal_sampler.reset(&proposal_sampler);
-        }else{
-            const auto inv_float_M = 1.0/static_cast<my_float>(M);
-            std::vector<my_float> weight_set{};
-            _proposal_set.reserve(M);
-            weight_set.reserve(M);
-
-            //generate M proposal samples, and calculate weights for each.
-            for(int j = 0; j<M; ++j){
-                auto xj = proposal_sampler.next_sample();
-                _proposal_set.emplace_back(xj);
-                auto p_hat = target_distribution(xj);
-                auto p = proposal_sampler.evaluate(xj);
-                auto w = (p_hat/p)*inv_float_M;
-                weight_set.emplace_back(w);
-            }
-
-            correct_factor = std::accumulate(weight_set.begin(),weight_set.end(),0.0);
-
-            _prefix_sum.clear();
-            std::inclusive_scan(weight_set.cbegin(),weight_set.cend(),std::back_inserter(_prefix_sum),std::plus<my_float>{});
-            auto inv_total_sum = 1.0/_prefix_sum.back();
-            std::for_each(_prefix_sum.begin(),_prefix_sum.end(),[inv_total_sum](auto & s){s *= inv_total_sum;});
+        //generate M proposal samples, and calculate weights for each.
+        for(int j = 0; j<M; ++j){
+            auto xj = proposal_sampler.next_sample();
+            _proposal_set.emplace_back(xj);
+            auto p_hat = target_distribution(xj);
+            auto p = proposal_sampler.evaluate(xj);
+            auto w = (p_hat/p)*inv_float_M;
+            weight_set.emplace_back(w);
         }
+
+        correct_factor = std::accumulate(weight_set.begin(),weight_set.end(),0.0);
+
+        _prefix_sum.clear();
+        std::inclusive_scan(weight_set.cbegin(),weight_set.cend(),std::back_inserter(_prefix_sum),std::plus<my_float>{});
+        auto inv_total_sum = 1.0/_prefix_sum.back();
+        std::for_each(_prefix_sum.begin(),_prefix_sum.end(),[inv_total_sum](auto & s){s *= inv_total_sum;});
     }
 
     my_float next_sample(){
         auto rand = dice(gen);
-        if(_use_reservoir){
-            auto x = _proposal_sampler->next_sample();
-            auto p = _proposal_sampler->evaluate(x);
-            auto p_hat = _target_distribution(x);
-            auto w = p_hat/p;
-            
-            if(_reservoir.total_weight == 0){
-                _reservoir.current_sample = x;
-            }else{
-                auto threshold = w/(w+_reservoir.total_weight);
-                if(rand < threshold){
-                    _reservoir.current_sample = x;
-                }      
-            }
-
-            _reservoir.total_weight += w;
-
-            return _reservoir.current_sample;
-        }else{
-            //use binary search to draw a new weighted sample
-            auto lower = std::lower_bound(_prefix_sum.begin(),_prefix_sum.end(),rand);
-            return _proposal_set[std::distance(_prefix_sum.begin(),lower)];
-        }
+        //use binary search to draw a new weighted sample
+        auto lower = std::lower_bound(_prefix_sum.begin(),_prefix_sum.end(),rand);
+        return _proposal_set[std::distance(_prefix_sum.begin(),lower)];
     }
 
     my_float get_correct_factor() const{
-        return _use_reservoir?_reservoir.total_weight:correct_factor;
+        return correct_factor;
+    }
+};
+
+/*
+ * Weighted Reservoir Sampling
+ */
+struct reservoir{
+    my_float current_sample{};
+    my_float total_weight{};
+};
+
+struct wrs_sampler{
+private:
+    std::uniform_real_distribution<my_float> dice;
+    std::mt19937 gen;
+    reservoir _reservoir{};
+    std::function<my_float(my_float)> _target_distribution;
+    std::shared_ptr<sampler> _proposal_sampler;
+    int M = 0;
+public:
+    wrs_sampler(std::shared_ptr<sampler> proposal_sampler,const std::function<my_float(my_float)>& target_distribution){
+
+        static std::random_device rd;  // Will be used to obtain a seed for the random number engine
+        gen =  std::mt19937(rd());
+        dice = std::uniform_real_distribution<my_float>(0,1);
+        _target_distribution = target_distribution;
+        _proposal_sampler = std::move(proposal_sampler);
+    }
+
+    my_float next_sample(){
+        auto x = _proposal_sampler->next_sample();
+        auto p = _proposal_sampler->evaluate(x);
+        auto p_hat = _target_distribution(x);
+        auto w = p_hat/p;
+
+        if(M == 0){
+            _reservoir.current_sample = x;
+        }else{
+            auto threshold = w/(w+_reservoir.total_weight);
+            auto rand = dice(gen);
+            if(rand < threshold){
+                _reservoir.current_sample = x;
+            }
+        }
+
+        _reservoir.total_weight += w;
+        M++;
+
+        return _reservoir.current_sample;
+    }
+
+    my_float get_correct_factor() const{
+        return _reservoir.total_weight/M;
     }
 };
 
@@ -218,7 +236,7 @@ my_float ris_monte_carlo_integrator(const integral_info & int_info,sampler& prop
 
     proposal_sampler.set_domain(int_info.second.first,int_info.second.second);
 
-    sir_sampler sir{proposal_sampler,target_distribution,1000,true};
+    sir_sampler sir{proposal_sampler,target_distribution,1000};
 
     const auto & f = int_info.first;
 
@@ -233,4 +251,23 @@ my_float ris_monte_carlo_integrator(const integral_info & int_info,sampler& prop
     return result;
 }
 
+/*
+ * Monte carlo integrator with Weighted Reservoir Sampling
+ * Has side effect on WR sampler.
+ */
+my_float wrs_monte_carlo_integrator(const integral_info & int_info,wrs_sampler& wrs,const std::function<my_float(my_float)>& target_distribution,const int N){
+    const auto inv_float_N = 1.0/static_cast<my_float>(N);
+
+    const auto & f = int_info.first;
+
+    my_float result{};
+    for(int  i = 0; i<N; ++i){
+        auto x = wrs.next_sample();
+        result += f(x)/target_distribution(x) * inv_float_N;
+    }
+
+    result *= wrs.get_correct_factor();
+
+    return result;
+}
 #endif //INTEGRATOR_H

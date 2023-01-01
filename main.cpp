@@ -55,8 +55,14 @@ int main() {
     auto ground_truth = integrator(make_integral_info(f,0,10), 1e6);
     printf("%.8f\n", ground_truth);
     my_sampler s{};
-    while (true){
-        printf("%.8f\n",ris_monte_carlo_integrator(make_integral_info(f,0,10),s,f,1));
+    printf("%.8f\n",ris_monte_carlo_integrator(make_integral_info(f,0,10),s,f,1));
+
+    auto ps = std::make_shared<my_sampler>();
+    ps->set_domain(0,10);
+    wrs_sampler wrs{ps,f};
+
+    while(true){
+        printf("%.8f\n",wrs_monte_carlo_integrator(make_integral_info(f,0,10),wrs,f,1)-ground_truth);
     }
 
 #ifdef SHOW_IMG

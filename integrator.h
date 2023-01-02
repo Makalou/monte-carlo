@@ -14,12 +14,25 @@
 using my_float = double;
 using integrand = std::function<my_float (my_float)>;
 
+template<typename DomainType, typename RangeType>
+using better_integrand = std::function<RangeType(DomainType)>;
+
 template<typename T>
 using domain = std::pair<T,T>;
 
 using integral_info = std::pair<integrand,domain<my_float>>;
 
+template<typename DomainType, typename RangeType>
+using better_integral_info = std::pair<better_integrand<RangeType,DomainType>,domain<DomainType>>;
+
 integral_info make_integral_info(const integrand& ig,my_float a, my_float b){
+    return std::make_pair(ig,std::make_pair(a,b));
+}
+
+template<typename DomainType, typename RangeType>
+better_integral_info<DomainType,RangeType>
+make_better_integral_info(const better_integral_info<DomainType,RangeType>& ig,DomainType a, DomainType b)
+{
     return std::make_pair(ig,std::make_pair(a,b));
 }
 

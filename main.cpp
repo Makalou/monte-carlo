@@ -8,11 +8,13 @@
 namespace plt = matplot;
 #endif
 
+//Weierstrass function
 my_float f(my_float x){
     const static my_float a = -0.24;
     const static my_float b = 3.7;
     const static my_float pi = 3.1415926535897;
     my_float sum = 0;
+
     for(int n =0;n<=10;++n){
         sum += std::pow(a,n)*std::sin(0.1*std::pow(b,n)*pi*x);
     }

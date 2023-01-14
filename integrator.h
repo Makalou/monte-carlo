@@ -69,16 +69,16 @@ my_float naive_monte_carlo_integrator(const integral_info & int_info,sample_info
     const auto N = s_info.second;
     auto & _sampler = s_info.first;
 
-    const auto inv_float_N = 1.0/static_cast<my_float>(N);
     _sampler.set_domain(int_info.second.first,int_info.second.second);
 
     const auto & f = int_info.first;
 
     my_float result{};
-    for(int i = 0;i<N;++i){
+    int i = 1;
+    for(;i<=N;++i){
         auto x = _sampler.next_sample();
         auto pdf = _sampler.evaluate(x);
-        result += f(x)/pdf*inv_float_N;
+        result += (f(x)/pdf - result )/my_float(i);
     }
     return result;
 }
@@ -232,8 +232,6 @@ public:
  */
 my_float ris_monte_carlo_integrator(const integral_info & int_info,sampler& proposal_sampler,const std::function<my_float(my_float)>& target_distribution,const int N){
 
-    const auto inv_float_N = 1.0/static_cast<my_float>(N);
-
     proposal_sampler.set_domain(int_info.second.first,int_info.second.second);
 
     sir_sampler sir{proposal_sampler,target_distribution,1000};
@@ -241,9 +239,9 @@ my_float ris_monte_carlo_integrator(const integral_info & int_info,sampler& prop
     const auto & f = int_info.first;
 
     my_float result{};
-    for(int i =0; i<N; ++i){
+    for(int i = 1; i<=N; ++i){
         auto x = sir.next_sample();
-        result += f(x)/target_distribution(x) * inv_float_N;
+        result += (f(x)/target_distribution(x) - result)/my_float(i);
     }
 
     result *= sir.get_correct_factor();
